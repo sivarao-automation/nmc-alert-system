@@ -2,38 +2,40 @@ name: NMC Alert System
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # Prathi 30 mins ki run avtundi
-  workflow_dispatch:        # Manual ga run cheyadaniki
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
 permissions:
-  contents: write           # old.txt update cheyadaniki idi chala mukhyam
+  contents: write
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-python@v5
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 cloudscraper  # <-- cloudscraper add chesaanu
-          
+          # Mee requirements.txt file nundi selenium install avtundi
+          pip install -r requirements.txt 
+
       - name: Run Scraper
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python nmc_alert.py
-        
+
       - name: Save news state
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-          # old.txt lekapothe create chestundi, unte update chestundi
           git add old.txt
           git commit -m "Update news list" || exit 0
           git push
