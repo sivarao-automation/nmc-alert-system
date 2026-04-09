@@ -1,131 +1,139 @@
-import cloudscraper
-import requests
-from bs4 import BeautifulSoup
 import os
 import time
-import urllib3
-from requests.adapters import HTTPAdapter
+import requests
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Configuration
-URL = "https://www.nmc.org.in/all-news/"
-BOT_TOKEN = os.getenv("BOT_TOKEN") 
+# Settings
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 FILE_NAME = "old.txt"
 
-class SSLAdapter(HTTPAdapter):
-    def init_poolmanager(self, *args, **kwargs):
-        import ssl
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        kwargs['ssl_context'] = context
-        return super(SSLAdapter, self).init_poolmanager(*args, **kwargs)
+def get_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--ignore-certificate-errors")
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=chrome_options)
 
-def get_news():
-    scraper = cloudscraper.create_scraper()
-    scraper.mount("https://", SSLAdapter())
-    
+# --- 1. NMC Scraping ---
+def scrap_nmc(driver):
     try:
-        print("🔍 NMC Website check chestunnanu...")
-        r = scraper.get(URL, timeout=30, verify=False)
-        
-        if r.status_code != 200:
-            print(f"❌ Connection Error: {r.status_code}")
-            return []
-            
-        soup = BeautifulSoup(r.text, "html.parser")
-        news_list = []
-        
-        # Table vethukutunnam
-        table = soup.find("table")
-        if not table:
-            print("❌ Table dhorakaledhu! Website layout check cheyali.")
-            return []
-
-        rows = table.find_all("tr")
-        for row in rows:
+        driver.get("https://www.nmc.org.in/all-news/")
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        news = []
+        rows = soup.find("table").find_all("tr")
+        for row in rows[1:10]: # Top 10 items
             cols = row.find_all("td")
-            
-            # Screenshot prakaram 5 columns unnayi
             if len(cols) >= 4:
-                # Description column (Index 2)
-                description = cols[2].get_text(strip=True)
-                # Published On column (Index 4)
-                published_on = cols[4].get_text(strip=True) if len(cols) > 4 else "N/A"
-                
-                # Header row ni skip cheyadaniki
-                if "description" in description.lower() or "sl no" in description.lower():
-                    continue
+                desc = cols[2].get_text(strip=True)
+                date = cols[4].get_text(strip=True) if len(cols) > 4 else "N/A"
+                news.append(f"🏥 *NMC UPDATE*\n📅 {date}\n📝 {desc}")
+        return news
+    except: return []
 
-                # Download link (Index 3)
-                link_tag = cols[3].find("a")
-                link = ""
-                if link_tag and link_tag.get('href'):
-                    link = link_tag['href']
-                    if not link.startswith('http'):
-                        link = "https://www.nmc.org.in" + link
-                
-                if description:
-                    message = f"📅 *Published:* {published_on}\n📝 *Update:* {description}\n🔗 [Download Document]({link})"
-                    news_list.append(message)
-        
-        print(f"✅ Mottam {len(news_list)} news items dhorikaayi.")
-        return news_list
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        return []
+# --- 2. DME AP Scraping ---
+def scrap_dme(driver):
+    try:
+        driver.get("https://dme.ap.nic.in/")
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        news = []
+        # DME lo scrolling links (marquee) untayi
+        links = soup.find_all("a", href=True)
+        for l in links[:15]:
+            title = l.get_text(strip=True)
+            if len(title) > 20 and (".pdf" in l['href'] or "202" in title):
+                news.append(f"🏛️ *DME AP UPDATE*\n📝 {title}")
+        return news
+    except: return []
+
+# --- 3. MCC Scraping (UG, PG, SS) ---
+def scrap_mcc(driver):
+    urls = [
+        "https://mcc.nic.in/ug-medical-counselling/",
+        "https://mcc.nic.in/pg-medical-counselling/",
+        "https://mcc.nic.in/super-speciality-counselling/"
+    ]
+    news = []
+    for url in urls:
+        try:
+            driver.get(url)
+            time.sleep(3)
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+            # MCC News Section
+            items = soup.select(".news-ticker a") or soup.find_all("a", {"class": "news-link"})
+            category = "UG" if "ug-" in url else ("PG" if "pg-" in url else "SS")
+            for item in items[:5]:
+                title = item.get_text(strip=True)
+                if title: news.append(f"🎓 *MCC {category} UPDATE*\n📝 {title}")
+        except: continue
+    return news
+
+# --- 4. NTRUHS Scraping ---
+def scrap_ntruhs(driver):
+    try:
+        driver.get("https://drntr.uhsap.in/index/")
+        time.sleep(3)
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        news = []
+        # NTRUHS 'What's New' leda table logic
+        items = soup.find_all("a", href=True)
+        for item in items:
+            text = item.get_text(strip=True)
+            if len(text) > 30 and ("202" in text or "Admission" in text or "Exam" in text):
+                news.append(f"🩺 *NTRUHS UPDATE*\n📝 {text}")
+        return news[:15]
+    except: return []
 
 def send_telegram_message(message):
-    if not BOT_TOKEN or not CHAT_ID:
-        return False
-    telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        r = requests.post(telegram_url, data=payload, verify=False)
-        return r.status_code == 200
-    except:
-        return False
+    requests.post(url, data=payload, verify=False)
 
 def main():
-    print("--- NMC Bot Active ---")
-    if not BOT_TOKEN or not CHAT_ID:
-        print("❌ Secrets Missing! GitHub settings check cheyandi.")
-        return
+    print("--- Multi-Site Bot Active ---")
+    driver = get_driver()
+    all_news = []
+    
+    print("Checking NMC...")
+    all_news.extend(scrap_nmc(driver))
+    print("Checking DME...")
+    all_news.extend(scrap_dme(driver))
+    print("Checking MCC...")
+    all_news.extend(scrap_mcc(driver))
+    print("Checking NTRUHS...")
+    all_news.extend(scrap_ntruhs(driver))
+    
+    driver.quit()
 
-    # Paatha data load cheyadam
     if os.path.exists(FILE_NAME):
         with open(FILE_NAME, "r", encoding="utf-8") as f:
             old_news = f.read().splitlines()
     else:
         old_news = []
 
-    current_news = get_news()
-    if not current_news:
-        return
-
-    # Kotha updates filter (Title match logic)
-    def get_desc(item):
-        # Update line ni extract chestundi comparison kosam
-        lines = item.split('\n')
-        return lines[1] if len(lines) > 1 else item
-
-    old_titles = [get_desc(o) for o in old_news if o.strip()]
-    new_items = [item for item in current_news if get_desc(item) not in old_titles]
+    # Filter only new items
+    new_items = [n for n in all_news if n.strip() not in old_news]
 
     if new_items:
-        print(f"🚀 {len(new_items)} kotha updates dhorikaayi!")
+        print(f"🚀 Found {len(new_items)} new updates!")
         for item in reversed(new_items):
-            if send_telegram_message(item):
-                print("📤 Telegram ki pampaanu.")
+            send_telegram_message(item)
             time.sleep(1)
         
-        # old.txt update
         with open(FILE_NAME, "w", encoding="utf-8") as f:
-            f.write("\n".join(current_news))
+            f.write("\n".join(all_news))
     else:
-        print("😴 Kotha updates emi levu.")
+        print("😴 No new updates.")
 
 if __name__ == "__main__":
     main()
