@@ -5,48 +5,44 @@ import os
 import time
 import urllib3
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.ssl_ import create_urllib3_context
 
-# SSL warnings ni silent cheyadaniki
+# GitHub environment compatibility kosam idi simplify chesam
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration
 URL = "https://www.nmc.org.in/all-news/"
-# Secrets (Variables set cheyakapothe ikkada direct ga quotes lo ivvandi)
 BOT_TOKEN = os.getenv("BOT_TOKEN") 
 CHAT_ID = os.getenv("CHAT_ID")
 FILE_NAME = "old.txt"
 
-# SSL Error ni bypass chese special class
+# SSL Bypass Adapter
 class SSLAdapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
-        context = create_urllib3_context()
+        import ssl
+        context = ssl.create_default_context()
         context.check_hostname = False
-        context.verify_mode = urllib3.util.ssl_.CERT_NONE
+        context.verify_mode = ssl.CERT_NONE
         kwargs['ssl_context'] = context
         return super(SSLAdapter, self).init_poolmanager(*args, **kwargs)
 
 def get_news():
     scraper = cloudscraper.create_scraper()
-    # Adapter ni mount chestunnam SSL bypass kosam
     scraper.mount("https://", SSLAdapter())
     
     try:
-        print("🔍 Website nundi data fetch chestunnanu (Advanced SSL Bypass)...")
+        print("🔍 Website fetch start...")
         r = scraper.get(URL, timeout=30, verify=False)
         
         if r.status_code != 200:
-            print(f"❌ Website Error! Status Code: {r.status_code}")
+            print(f"❌ Status Code: {r.status_code}")
             return []
             
         soup = BeautifulSoup(r.text, "html.parser")
         news_list = []
-        
-        # Table rows vethukudham
         rows = soup.find_all("tr")
         
         if not rows:
-            print("❌ Rows dhorakaledhu! Website layout check cheyali.")
+            print("❌ No rows found.")
             return []
 
         for row in rows:
@@ -69,36 +65,29 @@ def get_news():
                 if title:
                     news_list.append(f"📅 *Date:* {date}\n📝 *Title:* {title}\n🔗 [Click Here]({link})")
         
-        print(f"✅ Total {len(news_list)} items dhorikaayi.")
+        print(f"✅ Found {len(news_list)} items.")
         return news_list
-
     except Exception as e:
-        print(f"❌ Scraping Error: {e}")
+        print(f"❌ Error: {e}")
         return []
 
 def send_telegram_message(message):
     if not BOT_TOKEN or not CHAT_ID:
         return False
-    
     telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    
     try:
-        # Telegram ki simple requests saripotundi
         r = requests.post(telegram_url, data=payload, verify=False)
         return r.status_code == 200
-    except Exception as e:
-        print(f"❌ Telegram Error: {e}")
+    except:
         return False
 
 def main():
     print("--- NMC Bot Active ---")
-    
     if not BOT_TOKEN or not CHAT_ID:
-        print("⚠️ BOT_TOKEN leda CHAT_ID missing! Secrets check cheyandi.")
+        print("❌ Secrets Missing!")
         return
 
-    # Paatha news load
     if os.path.exists(FILE_NAME):
         with open(FILE_NAME, "r", encoding="utf-8") as f:
             old_news = f.read().splitlines()
@@ -106,12 +95,10 @@ def main():
         old_news = []
 
     current_news = get_news()
-    
     if not current_news:
-        print("⚠️ Data emi dhorakaledhu.")
+        print("⚠️ No data.")
         return
 
-    # Kotha news filter
     def get_title(item):
         lines = item.split('\n')
         return lines[1] if len(lines) > 1 else item
@@ -120,17 +107,14 @@ def main():
     new_items = [item for item in current_news if get_title(item) not in old_titles]
 
     if new_items:
-        print(f"🚀 {len(new_items)} kotha updates pampistunnanu!")
+        print(f"🚀 Sending {len(new_items)} updates...")
         for item in reversed(new_items):
-            if send_telegram_message(item):
-                print("📤 Sent to Telegram.")
+            send_telegram_message(item)
             time.sleep(1)
-
-        # old.txt update
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(current_news))
     else:
-        print("😴 Kotha updates emi levu.")
+        print("😴 No new updates.")
 
 if __name__ == "__main__":
     main()
